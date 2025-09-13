@@ -1,5 +1,6 @@
 from flask import Flask, request, Response, stream_with_context
 import yt_dlp
+import re
 import os
 
 app = Flask(__name__)
@@ -12,6 +13,10 @@ QUALITY_MAP = {
     "best": "bestvideo+bestaudio/best",
     "audio": "bestaudio",
 }
+
+def sanitize_filename(name: str) -> str:
+    """Remove characters invalid for filenames"""
+    return re.sub(r'[\\/*?:"<>|]', "", name)
 
 @app.route('/download', methods=['GET'])
 def download():
@@ -26,24 +31,23 @@ def download():
     try:
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(link, download=False)
-            title = info.get('title', 'video')
+            title = sanitize_filename(info.get('title', 'video'))
             filename = f"{title}.mp4"
 
         ydl_opts = {
             'format': ydl_quality,
-            'outtmpl': filename,
+            'quiet': True,
+            'outtmpl': '-',  
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([link])
-
         def generate():
-            with open(filename, "rb") as f:
-                chunk = f.read(1024*1024)
-                while chunk:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                process = ydl.urlopen(link)
+                while True:
+                    chunk = process.read(1024*1024)
+                    if not chunk:
+                        break
                     yield chunk
-                    chunk = f.read(1024*1024)
-            os.remove(filename)
 
         return Response(
             stream_with_context(generate()),
@@ -54,5 +58,7 @@ def download():
     except Exception as e:
         return {"error": str(e)}, 500
 
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
